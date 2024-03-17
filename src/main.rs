@@ -1,9 +1,9 @@
 use anyhow::Context;
 use clap::{Parser, Subcommand};
 use std::ffi::CStr;
-use std::io::{BufRead, Read, Write};
-use std::path::{Path, PathBuf};
-use std::{any, fs};
+use std::fs;
+use std::io::{BufRead, Read};
+use std::path::Path;
 
 /// Simple program to greet a person
 #[derive(Parser, Debug)]
@@ -79,32 +79,18 @@ fn main() -> anyhow::Result<()> {
                 "blob" => Kind::Blob,
                 _ => anyhow::bail!("unsupported object kind: {kind}"),
             };
-            let Some(size) = header
-                .strip_prefix("blob ")
-                .or_else(|| header.strip_prefix("tree "))
-                .or_else(|| header.strip_prefix("commit "))
-                .or_else(|| header.strip_prefix("tag "))
-                .map(|s| {
-                    s.parse::<usize>()
-                        .expect(".git/objects file header has invalid size: {size}")
-                })
-            else {
-                anyhow::bail!(
-                    ".git/objects file header is not valid. Did not start with 'blob ': '{header}'"
-                );
-            };
-            buf.clear();
-            buf.resize(size, 0);
-            z.read_exact(&mut buf)
-                .context("read true contents of .git/objects file")?;
-            let n = z
-                .read(&mut [0])
-                .context("validate EOF in .git/object file")?;
-            anyhow::ensure!(n == 0, ".git/objects file had {n} extra bytes");
-            let stdout = std::io::stdout();
-            let mut stdout = stdout.lock();
+            let size = size
+                .parse::<u64>()
+                .context("parse .git/objects file size")?;
+            let mut z = z.take(size);
             match kind {
-                Kind::Blob => stdout.write_all(&buf).context("write to stdout")?,
+                Kind::Blob => {
+                    let stdout = std::io::stdout();
+                    let mut stdout = stdout.lock();
+                    let n = std::io::copy(&mut z, &mut stdout)
+                        .context("write .git/objects file to stdout")?;
+                    anyhow::ensure!(n == size, ".git/objects file was not the expected size; expected {size}, got {n} bytes");
+                }
             }
         }
     }
